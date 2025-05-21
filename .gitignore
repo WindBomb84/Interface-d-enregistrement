@@ -1,6 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
+*.pyo
 *$py.class
 
 # C extensions
@@ -172,3 +173,13 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Fichiers temporaires de l’éditeur
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# Fichiers système
+.DS_Store
+Thumbs.db
