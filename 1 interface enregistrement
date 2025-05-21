@@ -1,0 +1,322 @@
+import tkinter as tk
+from tkinter import messagebox, filedialog, simpledialog
+import pyaudio
+import threading
+import wave
+import time
+import os
+import pygame
+import numpy as np
+
+class AudioInterfaceApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Sélection de périphérique audio")
+        self.root.geometry("600x400")
+        self.root.configure(bg="#2c3e50")  # Couleur de fond
+
+        self.audio = pyaudio.PyAudio()
+        self.devices = self.get_audio_devices()
+        self.selected_device_index = None
+        self.folder_selected = None  # Initialisation du dossier sélectionné
+        self.is_recording = False  # État de l'enregistrement
+        self.frames = []  # Stockage des données audio en mémoire
+
+        # Ajouter un conteneur pour les périphériques
+        self.device_frame = tk.Frame(self.root, bg="#34495e", bd=2, relief="groove")
+        self.device_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+        self.device_frame.pack_forget()  # Masquer la liste des périphériques par défaut
+
+        # Créer les contrôles d'enregistrement
+        self.recording_button = tk.Button(
+            self.root, text="●", font=("Arial", 16), fg="white", bg="gray", command=self.start_recording,
+            relief="flat", padx=10, pady=5
+        )
+        self.stop_button = tk.Button(
+            self.root, text="■", font=("Arial", 14), command=self.stop_recording,
+            bg="#e74c3c", fg="white", relief="flat", padx=10, pady=5
+        )
+        self.recording_time_label = tk.Label(
+            self.root, text="00:00", font=("Arial", 14), bg="#2c3e50", fg="white"
+        )
+
+        # Afficher les contrôles d'enregistrement au démarrage
+        self.show_recording_controls()
+
+        # Créer l'interface
+        self.create_interface()
+
+    def get_audio_devices(self):
+        devices = []
+        for i in range(self.audio.get_device_count()):
+            device_info = self.audio.get_device_info_by_index(i)
+            if device_info['maxInputChannels'] > 0:  # Filtrer uniquement les périphériques d'enregistrement
+                devices.append((i, device_info['name']))
+        return devices
+
+    def select_device(self, device_index):
+        self.selected_device_index = device_index
+        messagebox.showinfo("Périphérique sélectionné", f"Périphérique {self.devices[device_index][1]} sélectionné !")
+
+    def create_interface(self):
+        # Conteneur pour aligner les boutons
+        button_frame = tk.Frame(self.root, bg="#2c3e50")
+        button_frame.pack(side="top", fill="x", padx=10, pady=10)
+
+        # Bouton pour sélectionner un dossier
+        folder_button = tk.Button(
+            button_frame, text="Sélectionner un dossier", command=self.select_folder,
+            bg="#1abc9c", fg="white", font=("Arial", 12), relief="flat", padx=10, pady=5
+        )
+        folder_button.pack(side="left", padx=5)
+
+        # Bouton pour afficher/masquer la liste des périphériques
+        toggle_button = tk.Button(
+            button_frame, text="Afficher/Masquer Périphériques", command=self.toggle_device_list,
+            bg="#3498db", fg="white", font=("Arial", 12), relief="flat", padx=10, pady=5
+        )
+        toggle_button.pack(side="left", padx=5)
+
+        # Afficher les périphériques audio
+        self.display_devices()
+
+    def display_devices(self):
+        for widget in self.device_frame.winfo_children():
+            widget.destroy()
+
+        for index, (device_index, device_name) in enumerate(self.devices):
+            frame = tk.Frame(self.device_frame, bg="#2c3e50", pady=5)
+            frame.pack(fill="x", padx=10, pady=5)
+
+            label = tk.Label(frame, text=device_name, anchor="w", bg="#2c3e50", fg="white", font=("Arial", 10))
+            label.pack(side="left", fill="x", expand=True)
+
+            button = tk.Button(
+                frame, text="Utiliser", command=lambda i=index: self.select_device(i),
+                bg="#e74c3c", fg="white", font=("Arial", 10), relief="flat", padx=5, pady=2
+            )
+            button.pack(side="right")
+
+    def toggle_device_list(self):
+        # Fonction pour basculer la visibilité de la liste des périphériques
+        if self.device_frame.winfo_ismapped():
+            self.device_frame.pack_forget()
+            self.show_recording_controls()
+        else:
+            self.device_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+            self.hide_recording_controls()
+
+    def show_recording_controls(self):
+        # Fonction pour afficher les contrôles d'enregistrement
+        self.recording_button.place(relx=0.1, rely=0.5, anchor="center")
+        self.stop_button.place(relx=0.3, rely=0.5, anchor="center")
+        self.recording_time_label.place(relx=0.2, rely=0.5, anchor="center")
+
+    def hide_recording_controls(self):
+        # Fonction pour cacher les contrôles d'enregistrement
+        self.recording_button.place_forget()
+        self.stop_button.place_forget()
+        self.recording_time_label.place_forget()
+
+    def select_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.folder_selected = folder
+            messagebox.showinfo("Dossier sélectionné", f"Dossier sélectionné : {self.folder_selected}")
+
+    def start_recording(self):
+        if self.is_recording:
+            return  # Ne rien faire si déjà en cours d'enregistrement
+
+        if self.selected_device_index is None:
+            messagebox.showerror("Erreur", "Aucun périphérique audio sélectionné !")
+            return
+
+        self.is_recording = True
+        self.frames = []  # Réinitialiser les données audio
+
+        def record_audio():
+            stream = self.audio.open(
+                format=pyaudio.paInt16,
+                channels=1,  # Enregistrer en mono
+                rate=44100,
+                input=True,
+                input_device_index=self.selected_device_index,
+                frames_per_buffer=1024
+            )
+
+            start_time = time.time()
+            threading.Thread(target=self.update_recording_time, args=(start_time,), daemon=True).start()
+
+            while self.is_recording:
+                data = stream.read(1024)
+                self.frames.append(data)
+
+            stream.stop_stream()
+            stream.close()
+
+            self.ask_after_recording()
+
+        self.recording_button.config(bg="red")
+        threading.Thread(target=record_audio, daemon=True).start()
+
+    def stop_recording(self):
+        self.is_recording = False
+        self.recording_button.config(bg="gray")
+        self.recording_time_label.config(text="00:00")
+
+    def update_recording_time(self, start_time):
+        while self.is_recording:
+            elapsed_time = int(time.time() - start_time)
+            minutes, seconds = divmod(elapsed_time, 60)
+            self.recording_time_label.config(text=f"{minutes:02}:{seconds:02}")
+            time.sleep(1)
+
+    def ask_after_recording(self):
+        while True:
+            choice = messagebox.askquestion(
+                "Enregistrement terminé",
+                "Que voulez-vous faire ?\n\n- Yes : Écouter l'enregistrement\n- No : Enregistrer l'enregistrement\n- Cancel : Ne pas enregistrer l'enregistrement",
+                icon="question",
+                type="yesnocancel"
+            )
+            if choice == "yes":  # Écouter
+                self.play_audio()
+            elif choice == "no":  # Enregistrer
+                self.save_audio()
+                break
+            else:  # Ne pas enregistrer
+                self.frames = []  # Supprimer les données audio
+                break
+
+    def play_audio(self):
+        temp_file = "temp_playback.wav"
+        try:
+            # Créer un fichier temporaire pour la lecture
+            with wave.open(temp_file, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
+                wf.setframerate(44100)
+                wf.writeframes(b"".join(self.frames))
+
+            # Initialiser pygame.mixer
+            pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=512)
+            pygame.mixer.music.load(temp_file)
+            pygame.mixer.music.play()
+
+            # Calcul du temps total
+            total_frames = len(b"".join(self.frames)) // 2  # 2 bytes per sample (int16)
+            total_seconds = total_frames // 44100
+            total_minutes, total_secs = divmod(total_seconds, 60)
+            total_time_str = f"{total_minutes:02}:{total_secs:02}"
+
+            # Créer le label et le bouton stop en bas à gauche
+            playback_frame = tk.Frame(self.root, bg="#2c3e50")
+            playback_frame.place(relx=0.01, rely=0.95, anchor="sw")
+
+            time_label = tk.Label(
+                playback_frame, text=f"00:00/{total_time_str}",
+                font=("Arial", 12), bg="#2c3e50", fg="white"
+            )
+            time_label.pack(side="left", padx=(0, 10))
+
+            stop_button = tk.Button(
+                playback_frame, text="Stop", font=("Arial", 12),
+                bg="#e74c3c", fg="white", command=lambda: stop_playback(),
+                relief="flat", padx=10, pady=2
+            )
+            stop_button.pack(side="left")
+
+            stop_pressed = {"value": False}
+
+            def stop_playback():
+                stop_pressed["value"] = True
+                pygame.mixer.music.stop()
+
+            # Mise à jour du temps courant
+            def update_time():
+                while pygame.mixer.music.get_busy() and not stop_pressed["value"]:
+                    pos_ms = pygame.mixer.music.get_pos()
+                    pos_sec = max(0, pos_ms // 1000)
+                    pos_min, pos_s = divmod(pos_sec, 60)
+                    time_label.config(text=f"{pos_min:02}:{pos_s:02}/{total_time_str}")
+                    self.root.update()
+                    time.sleep(0.1)
+                # Masquer les contrôles après la lecture
+                playback_frame.place_forget()
+
+            update_thread = threading.Thread(target=update_time, daemon=True)
+            update_thread.start()
+
+            # Attendre la fin de la lecture ou l'appui sur stop
+            while pygame.mixer.music.get_busy() and not stop_pressed["value"]:
+                self.root.update()
+                time.sleep(0.1)
+
+        except Exception as e:
+            messagebox.showerror("Erreur", f"Impossible de lire l'enregistrement : {e}")
+        finally:
+            pygame.mixer.music.stop()
+            pygame.mixer.quit()
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+
+    def save_audio(self):
+        if self.folder_selected is None:
+            messagebox.showerror("Erreur", "Aucun dossier sélectionné pour enregistrer le fichier.")
+            return
+
+        # Créer une fenêtre modale pour entrer le nom du fichier
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Nom du fichier")
+        dialog.geometry("400x200")  # Définir une taille plus grande pour la fenêtre
+        dialog.resizable(False, False)  # Désactiver le redimensionnement
+        dialog.grab_set()  # Rendre la fenêtre modale
+
+        # Ajouter un label et une entrée pour le nom du fichier
+        label = tk.Label(dialog, text="Entrez le nom du fichier :", font=("Arial", 12))
+        label.pack(pady=10)
+
+        file_name_entry = tk.Entry(dialog, font=("Arial", 14), width=30)
+        file_name_entry.pack(pady=10)
+
+        # Ajouter un bouton pour valider
+        def on_save():
+            file_name = file_name_entry.get().strip()
+            if file_name:
+                save_path = os.path.join(self.folder_selected, f"{file_name}.wav")
+                try:
+                    with wave.open(save_path, "wb") as wf:
+                        wf.setnchannels(1)
+                        wf.setsampwidth(self.audio.get_sample_size(pyaudio.paInt16))
+                        wf.setframerate(44100)
+                        wf.writeframes(b"".join(self.frames))
+                    messagebox.showinfo("Succès", f"Fichier sauvegardé sous : {save_path}")
+                except Exception as e:
+                    messagebox.showerror("Erreur", f"Impossible de sauvegarder le fichier : {e}")
+                dialog.destroy()  # Fermer la fenêtre après l'enregistrement
+            else:
+                messagebox.showwarning("Attention", "Le nom du fichier ne peut pas être vide.")
+
+        save_button = tk.Button(dialog, text="Enregistrer", command=on_save, bg="#1abc9c", fg="white", font=("Arial", 12))
+        save_button.pack(pady=10)
+
+        # Ajouter un bouton pour annuler
+        def on_cancel():
+            dialog.destroy()
+
+        cancel_button = tk.Button(dialog, text="Annuler", command=on_cancel, bg="#e74c3c", fg="white", font=("Arial", 12))
+        cancel_button.pack(pady=5)
+
+        dialog.mainloop()
+
+# Interface principale
+root = tk.Tk()
+app = AudioInterfaceApp(root)
+
+try:
+    root.mainloop()
+except Exception as e:
+    messagebox.showerror("Erreur", f"Une erreur s'est produite : {e}")
+finally:
+    app.audio.terminate()
